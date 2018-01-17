@@ -271,10 +271,6 @@ public:
   void visitSubgroupBlockWriteINTEL(CallInst *CI, StringRef MangledName,
                                     const std::string &DemangledName);
 
-  void visitDbgInfoIntrinsic(DbgInfoIntrinsic &I){
-    I.dropAllReferences();
-    I.eraseFromParent();
-  }
   static char ID;
 private:
   Module *M;

@@ -118,8 +118,14 @@ public:
   // Complete constructor for instruction with type but no id
   SPIRVInstruction(unsigned TheWordCount, Op TheOC, SPIRVType *TheType,
       SPIRVBasicBlock *TheBB);
+  // Special constructor for debug instruction
+  SPIRVInstruction(unsigned TheWordCount, Op TheOC, SPIRVType *TheType,
+                   SPIRVId TheId, SPIRVModule *TheBM,
+                   SPIRVBasicBlock *TheBB = nullptr);
+
   // Incomplete constructor
-  SPIRVInstruction(Op TheOC = OpNop):SPIRVValue(TheOC), BB(NULL){}
+  SPIRVInstruction(Op TheOC = OpNop)
+      : SPIRVValue(TheOC), BB(NULL), DebugScope(nullptr) {}
 
   virtual bool isInst() const { return true;}
   SPIRVBasicBlock *getParent() const {return BB;}
@@ -167,12 +173,21 @@ public:
       setModule(TheBB->getModule());
   }
 
+  void setDebugScope(SPIRVEntry *Scope) {
+    DebugScope = Scope;
+  }
+
+  SPIRVEntry *getDebugScope() const {
+    return DebugScope;
+  }
+
 protected:
   void validate()const {
     SPIRVValue::validate();
   }
 private:
   SPIRVBasicBlock *BB;
+  SPIRVEntry *DebugScope;
 };
 
 class SPIRVInstTemplateBase:public SPIRVInstruction {
@@ -1322,9 +1337,20 @@ public:
     validate();
     assert(BB && "Invalid BB");
   }
+
+  SPIRVFunctionCallGeneric(SPIRVModule *BM, SPIRVWord ResId, SPIRVType *TheType,
+                           const std::vector<SPIRVWord>& TheArgs) :
+    SPIRVInstruction(TheArgs.size() + FixedWordCount, OC, TheType, ResId, BM),
+    Args(TheArgs) {
+  }
+
   SPIRVFunctionCallGeneric():SPIRVInstruction(OC) {}
-  const std::vector<SPIRVWord> &getArguments() {
+  const std::vector<SPIRVWord> &getArguments() const{
     return Args;
+  }
+  void setArguments(const std::vector<SPIRVWord> &A) {
+    Args = A;
+    setWordCount(Args.size() + FixedWordCount);
   }
   std::vector<SPIRVValue *> getArgumentValues() {
     return getValues(Args);
@@ -1382,27 +1408,47 @@ public:
     setExtSetKindById();
     validate();
   }
+
+  SPIRVExtInst(SPIRVModule* BM, SPIRVId ResId, SPIRVType *TheType,
+               SPIRVExtInstSetKind SetKind, SPIRVWord SetId, SPIRVWord InstId,
+               const std::vector<SPIRVWord>& Args):
+    SPIRVFunctionCallGeneric(BM, ResId, TheType, Args),
+    ExtSetKind(SetKind),
+    ExtSetId(SetId),
+    ExtOp(InstId) {
+  }
+
   SPIRVExtInst(SPIRVExtInstSetKind SetKind = SPIRVEIS_Count,
       unsigned ExtOC = SPIRVWORD_MAX)
-    :ExtSetId(SPIRVWORD_MAX), ExtOp(ExtOC), ExtSetKind(SetKind) {}
+    : ExtSetKind(SetKind), ExtSetId(SPIRVWORD_MAX), ExtOp(ExtOC) {}
   void setExtSetId(unsigned Set) { ExtSetId = Set;}
   void setExtOp(unsigned ExtOC) { ExtOp = ExtOC;}
-  SPIRVId getExtSetId()const {
+
+  SPIRVId getExtSetId() const {
     return ExtSetId;
   }
-  SPIRVWord getExtOp()const {
+  SPIRVWord getExtOp() const {
     return ExtOp;
   }
+
+  SPIRVExtInstSetKind GetExtSetKind() const {
+    return ExtSetKind;
+  }
+
   void setExtSetKindById() {
     assert(Module && "Invalid module");
     ExtSetKind = Module->getBuiltinSet(ExtSetId);
-    assert(ExtSetKind == SPIRVEIS_OpenCL && "not supported");
+    assert((ExtSetKind == SPIRVEIS_OpenCL || ExtSetKind == SPIRVEIS_Debug)
+           && "not supported");
   }
   void encode(spv_ostream &O) const {
     getEncoder(O) << Type << Id << ExtSetId;
     switch(ExtSetKind) {
     case SPIRVEIS_OpenCL:
       getEncoder(O) << ExtOpOCL;
+      break;
+    case SPIRVEIS_Debug:
+      getEncoder(O) << ExtOpDebug;
       break;
     default:
       assert(0 && "not supported");
@@ -1416,6 +1462,9 @@ public:
     switch(ExtSetKind) {
     case SPIRVEIS_OpenCL:
       getDecoder(I) >> ExtOpOCL;
+      break;
+    case SPIRVEIS_Debug:
+      getDecoder(I) >> ExtOpDebug;
       break;
     default:
       assert(0 && "not supported");
@@ -1445,12 +1494,13 @@ public:
     }
   }
 protected:
+  SPIRVExtInstSetKind ExtSetKind;
   SPIRVId ExtSetId;
   union {
     SPIRVWord ExtOp;
     OCLExtOpKind ExtOpOCL;
+    SPIRVDebugExtOpKind ExtOpDebug;
   };
-  SPIRVExtInstSetKind ExtSetKind;
 };
 
 class SPIRVCompositeConstruct : public SPIRVInstruction {

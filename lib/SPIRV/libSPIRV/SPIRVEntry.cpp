@@ -468,6 +468,7 @@ SPIRVExecutionMode::decode(std::istream &I) {
   case ExecutionModeInvocations:
   case ExecutionModeOutputVertices:
   case ExecutionModeVecTypeHint:
+  case ExecutionModeSubgroupSize:
     WordLiterals.resize(1);
     break;
   default:

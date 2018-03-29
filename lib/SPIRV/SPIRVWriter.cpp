@@ -300,7 +300,6 @@ private:
   void mutateFuncArgType(const std::map<unsigned, Type*>& ChangedType,
       Function* F);
 
-  SPIRVValue *transSpcvCast(CallInst* CI, SPIRVBasicBlock *BB);
   SPIRVValue *oclTransSpvcCastSampler(CallInst* CI, SPIRVBasicBlock *BB);
 
   SPIRV::SPIRVInstruction* transUnaryInst(UnaryInstruction* U,
@@ -491,11 +490,15 @@ LLVMToSPIRV::transType(Type *T) {
         auto PipeT = BM->addPipeType();
         PipeT->setPipeAcessQualifier(SPIRSPIRVAccessQualifierMap::map(Acc));
         return mapType(T, PipeT);
-      } else if (STName.find(kSPR2TypeName::ImagePrefix) == 0) {
+      }
+      if (STName.startswith(kSPR2TypeName::ImagePrefix)) {
         assert(AddrSpc == SPIRAS_Global);
         auto SPIRVImageTy = getSPIRVImageTypeFromOCL(M, T);
         return mapType(T, transType(SPIRVImageTy));
-      } else if (STName.startswith(kSPIRVTypeName::PrefixAndDelim))
+      }
+      if (STName == kSPR2TypeName::Sampler)
+        return mapType(T, transType(getSamplerType(M)));
+      if (STName.startswith(kSPIRVTypeName::PrefixAndDelim))
         return transSPIRVOpaqueType(T);
       else if (OCLOpaqueTypeOpCodeMap::find(STName, &OpCode)) {
         switch (OpCode) {
@@ -1206,8 +1209,9 @@ LLVMToSPIRV::transBuiltinSet() {
   return BM->importBuiltinSet(SS.str(), &ExtSetId);
 }
 
-/// Transform sampler* spcv.cast(i32 arg)
-/// Only two cases are possible:
+/// Translate sampler* spcv.cast(i32 arg) or
+/// sampler* __translate_sampler_initializer(i32 arg)
+/// Three cases are possible:
 ///   arg = ConstantInt x -> SPIRVConstantSampler
 ///   arg = i32 argument -> transValue(arg)
 ///   arg = load from sampler -> look through load
@@ -1217,8 +1221,9 @@ LLVMToSPIRV::oclTransSpvcCastSampler(CallInst* CI, SPIRVBasicBlock *BB) {
   auto FT = F->getFunctionType();
   auto RT = FT->getReturnType();
   assert(FT->getNumParams() == 1);
-  assert(isSPIRVType(RT, kSPIRVTypeName::Sampler) &&
-    FT->getParamType(0)->isIntegerTy() && "Invalid sampler type");
+  assert((isSPIRVType(RT, kSPIRVTypeName::Sampler) ||
+          isPointerToOpaqueStructType(RT, kSPR2TypeName::Sampler)) &&
+         FT->getParamType(0)->isIntegerTy() && "Invalid sampler type");
   auto Arg = CI->getArgOperand(0);
 
   auto GetSamplerConstant = [&](uint64_t SamplerValue) {
@@ -1250,14 +1255,9 @@ LLVMToSPIRV::oclTransSpvcCastSampler(CallInst* CI, SPIRVBasicBlock *BB) {
   return BV;
 }
 
-SPIRVValue *
-LLVMToSPIRV::transSpcvCast(CallInst* CI, SPIRVBasicBlock *BB) {
-  return oclTransSpvcCastSampler(CI, BB);
-}
-
-SPIRVValue *
-LLVMToSPIRV::transIntrinsicInst(IntrinsicInst *II, SPIRVBasicBlock *BB) {
-  auto getMemoryAccess = [](MemIntrinsic *MI)->std::vector<SPIRVWord> {
+SPIRVValue *LLVMToSPIRV::transIntrinsicInst(IntrinsicInst *II,
+                                            SPIRVBasicBlock *BB) {
+  auto getMemoryAccess = [](MemIntrinsic *MI) -> std::vector<SPIRVWord> {
     std::vector<SPIRVWord> MemoryAccess(1, MemoryAccessMaskNone);
     if (SPIRVWord AlignVal = MI->getAlignment()) {
       MemoryAccess[0] |= MemoryAccessAlignedMask;
@@ -1345,8 +1345,8 @@ LLVMToSPIRV::transCallInst(CallInst *CI, SPIRVBasicBlock *BB) {
   auto MangledName = F->getName();
   std::string DemangledName;
 
-  if (MangledName.startswith(SPCV_CAST))
-    return transSpcvCast(CI, BB);
+  if (MangledName.startswith(SPCV_CAST) || MangledName == SAMPLER_INIT)
+    return oclTransSpvcCastSampler(CI, BB);
 
   if (oclIsBuiltin(MangledName, &DemangledName) ||
       isDecoratedSPIRVFunc(F, &DemangledName))
@@ -1511,10 +1511,11 @@ LLVMToSPIRV::translate() {
   // SPIR-V logical layout requires all function declarations go before
   // function definitions.
   std::vector<Function *> Decls, Defs;
-  for (auto &F:*M) {
-    if (isBuiltinTransToInst(&F) || isBuiltinTransToExtInst(&F)
-        || F.getName().startswith(SPCV_CAST) ||
-        F.getName().startswith(LLVM_MEMCPY))
+  for (auto &F : *M) {
+    if (isBuiltinTransToInst(&F) || isBuiltinTransToExtInst(&F) ||
+        F.getName().startswith(SPCV_CAST) ||
+        F.getName().startswith(LLVM_MEMCPY) ||
+        F.getName().startswith(SAMPLER_INIT))
       continue;
     if (F.isDeclaration())
       Decls.push_back(&F);

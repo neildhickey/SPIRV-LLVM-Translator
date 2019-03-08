@@ -1085,7 +1085,8 @@ public:
     return static_cast<SPIRVBasicBlock *>(getValue(Default));
   }
   size_t getLiteralsCount() const {
-    return getSelect()->getType()->getBitWidth() / (sizeof(SPIRVWord) * 8);
+    unsigned ByteWidth = getSelect()->getType()->getBitWidth() / 8;
+    return (ByteWidth / sizeof(SPIRVWord)) + !!(ByteWidth % sizeof(SPIRVWord));
   }
   size_t getPairSize() const { return getLiteralsCount() + 1; }
   size_t getNumPairs() const { return Pairs.size() / getPairSize(); }
